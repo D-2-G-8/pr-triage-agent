@@ -84,6 +84,15 @@ class TriageRun:
 
 
 @dataclass(frozen=True)
+class ScreenResult:
+    """Tier 1 cheap-screen verdict: is a PR worth a full, expensive review?"""
+
+    worth_review: bool
+    reason: str
+    likely_category: str
+
+
+@dataclass(frozen=True)
 class RepoContext:
     """The repository's own DoD/AC reference material for grounding assessments."""
 
@@ -106,3 +115,4 @@ class EnrichedPullRequest:
     linked_issues: list[LinkedIssue]
     changed_files: list[ChangedFile]
     files_truncated: bool
+    author_is_bot: bool = False

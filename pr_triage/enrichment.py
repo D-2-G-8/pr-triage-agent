@@ -9,7 +9,7 @@ query($owner: String!, $name: String!, $number: Int!) {
       body
       state
       isDraft
-      author { login }
+      author { login __typename }
       labels(first: 100) { nodes { name } }
       commits(last: 1) {
         nodes { commit { statusCheckRollup { state } } }
@@ -51,7 +51,9 @@ def fetch_pr_enrichment(repo_full_name, number, execute):
     data = execute(_QUERY, {"owner": owner, "name": name, "number": number})
     pr = data["repository"]["pullRequest"]
 
-    author = pr["author"]["login"] if pr["author"] else None
+    author_node = pr["author"]
+    author = author_node["login"] if author_node else None
+    author_is_bot = bool(author_node) and author_node.get("__typename") == "Bot"
     files = pr["files"]
     return EnrichedPullRequest(
         number=pr["number"],
@@ -81,4 +83,5 @@ def fetch_pr_enrichment(repo_full_name, number, execute):
             for node in files["nodes"]
         ],
         files_truncated=files["pageInfo"]["hasNextPage"],
+        author_is_bot=author_is_bot,
     )

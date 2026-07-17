@@ -15,9 +15,10 @@ from pr_triage.github_client import build_client
 from pr_triage.github_graphql import GraphQLClient
 from pr_triage.github_rest import RestClient
 from pr_triage.github_collector import fetch_open_pull_requests
-from pr_triage.pipeline import triage_pr
+from pr_triage.pipeline import triage_pr_tiered
 from pr_triage.repo_context import fetch_repo_context
 from pr_triage.runner import run_backlog
+from pr_triage.screen import screen_pr
 
 
 def _build_get_text(repo):
@@ -52,11 +53,12 @@ def triage_repository(repo_full_name, limit=None, max_diff_chars=40000, max_atte
         prs = prs[:limit]
 
     def process(pr):
-        return triage_pr(
+        return triage_pr_tiered(
             pr.number, pr.title,
             enrich=lambda n: fetch_pr_enrichment(repo_full_name, n, gql.execute),
             get_diff=lambda n: rest.fetch_pr_diff(repo_full_name, n),
             repo_context=repo_context,
+            screen=lambda e: screen_pr(e, claude),
             analyze=lambda e, d, ctx: analyze_pr(e, d, ctx, claude),
             max_diff_chars=max_diff_chars,
         )

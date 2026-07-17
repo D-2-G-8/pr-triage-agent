@@ -90,6 +90,23 @@ def test_maps_graphql_payload_to_enriched_pull_request():
     )
 
 
+def test_flags_bot_author_from_typename():
+    execute = fake_execute(make_data(author={"login": "dependabot", "__typename": "Bot"}))
+
+    result = fetch_pr_enrichment("anthropics/claude-cookbooks", 42, execute)
+
+    assert result.author == "dependabot"
+    assert result.author_is_bot is True
+
+
+def test_human_author_is_not_flagged_as_bot():
+    execute = fake_execute(make_data(author={"login": "daria", "__typename": "User"}))
+
+    result = fetch_pr_enrichment("anthropics/claude-cookbooks", 42, execute)
+
+    assert result.author_is_bot is False
+
+
 def test_author_is_none_when_account_deleted():
     execute = fake_execute(make_data(author=None))
 
