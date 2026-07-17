@@ -24,8 +24,8 @@ Phase 0 (technical recon) — in progress. Implemented so far:
 - **Data collector (P0):** fetch all open PRs of a repository via the GitHub API.
 
 Recon so far confirms GitHub API access and rate-limit headroom for a full backlog
-pass, and estimates the cost of analyzing all 213 open PRs at **≈ $13 on Opus 4.8**
-(≈ $8 on Sonnet 5) — cheap enough to run whole.
+pass, and measures (via `count_tokens`) the cost of analyzing all 213 open PRs at
+**≈ $16 on Opus 4.8** (≈ $10 on Sonnet 5) — cheap enough to run whole.
 
 ## Project layout
 
