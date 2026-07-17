@@ -1,41 +1,44 @@
 # PR Triage Agent
 
-An LLM agent that triages the open-PR backlog of a public GitHub repository and
-produces a daily digest of *what is actually ready for human review* — instead of
-a raw list of 200+ pull requests.
-
-**v0 target repo:** [`anthropics/claude-cookbooks`](https://github.com/anthropics/claude-cookbooks)
-(213 open PRs as of 2026-07-17).
+An LLM agent that triages the open-PR backlog of **any public GitHub repository** and
+produces a digest of *what is actually ready for human review* — instead of a raw
+list of hundreds of pull requests. Point it at any `owner/repo`.
 
 ## Why
 
-Open repos of large AI companies accumulate PRs faster than maintainers can review
-them. The repo's own CI already answers *"does this PR pass the technical bar"*
-(lint, notebook validation, automated review). What's missing is the layer that
-answers *"which of these is worth a human's attention today"* — separating PRs with
-a real, current problem from duplicates, stale requests, and low-value changes, with
-reasoning grounded in the repo's own DoD/AC (`CONTRIBUTING.md`, PR template, CI
-status) rather than invented criteria.
+Popular open-source repos accumulate PRs faster than maintainers can review them. A
+repo's own CI already answers *"does this PR pass the technical bar"* (lint, tests,
+automated review). What's missing is the layer that answers *"which of these is worth
+a human's attention today"* — separating PRs with a real, current problem from
+duplicates, stale requests, and low-value changes, with reasoning grounded in **that
+repo's own** DoD/AC (`CONTRIBUTING.md`, PR template, CI status) rather than invented
+criteria. Because the grounding comes from each repository's own files, the tool
+adapts to whatever repo you run it against.
 
-## Status
+The first proving ground is
+[`anthropics/claude-cookbooks`](https://github.com/anthropics/claude-cookbooks)
+(213 open PRs), but nothing in the code is specific to it.
 
-Phase 0 (technical recon) — in progress. Implemented so far:
+## How it works
 
-- **Data collector (P0):** fetch all open PRs of a repository via the GitHub API.
+For each open PR the agent runs a pipeline:
 
-Recon so far confirms GitHub API access and rate-limit headroom for a full backlog
-pass, and measures (via `count_tokens`) the cost of analyzing all 213 open PRs at
-**≈ $16 on Opus 4.8** (≈ $10 on Sonnet 5) — cheap enough to run whole.
+1. **List** open PRs via the GitHub REST API (PyGithub, auto-paginated).
+2. **Enrich** each PR in one GitHub **GraphQL** query: labels, CI check rollup,
+   linked issues (`closingIssuesReferences`) with their 👍/comment engagement, and
+   the changed-file list.
+3. **Fetch the diff** text via REST and **cap** it (large notebook diffs are
+   truncated with an explicit marker to bound cost).
+4. **Analyze** with Claude (`claude-opus-4-8`, structured output) against the repo's
+   own `CONTRIBUTING.md` + PR template, returning five fields: `summary`,
+   `problem_statement`, `dod_ac_status`, `reality_assessment`, `recommended_category`
+   (one of `ready_for_review` / `likely_duplicate` / `stale` / `low_value`).
+5. **Aggregate** into a digest — `ready_for_review` first, capped to a top-N, with a
+   category breakdown — rendered as Markdown.
 
-## Project layout
-
-```
-pr_triage/
-  models.py            # PullRequest dataclass (frozen, GitHub-agnostic)
-  github_collector.py  # fetch_open_pull_requests(repo, client) -> list[PullRequest]
-  github_client.py     # build_client() -> authenticated PyGithub client
-tests/                 # pytest suite (TDD)
-```
+The run is resilient: transient errors (e.g. rate limits) are retried with backoff,
+and a single failing PR is recorded rather than aborting the whole pass. **Nothing is
+published anywhere** — the digest is the artifact for manual review.
 
 ## Setup
 
@@ -46,56 +49,113 @@ python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 ```
 
-Create a `.env` file with a read-only GitHub personal access token:
+Create a `.env` file with two tokens:
 
 ```
-GITHUB_TOKEN=ghp_your_token_here
+GITHUB_TOKEN=ghp_your_read_only_token
+ANTHROPIC_API_KEY=sk-ant-your_key
 ```
 
-## Usage
+- `GITHUB_TOKEN` — read-only GitHub personal access token (public data only).
+- `ANTHROPIC_API_KEY` — needed only for the Claude analysis step; listing/enriching
+  PRs works without it.
+
+## Running
+
+### CLI
+
+```bash
+python -m pr_triage.app <owner>/<repo> [limit]
+```
+
+```bash
+# smoke run on the first 3 open PRs of any repo (cheap — recommended first)
+.venv/bin/python -m pr_triage.app owner/repo 3
+
+# full backlog (all open PRs)
+.venv/bin/python -m pr_triage.app owner/repo
+```
+
+Prints the Markdown digest to stdout (per-PR failures go to stderr). Redirect to save
+it: `... owner/repo 3 > digest.md`.
+
+> **Cost scales with backlog size.** As a reference point, a full 213-PR pass over
+> `anthropics/claude-cookbooks` costs **≈ $16 on Opus 4.8** (measured via
+> `count_tokens`; ≈ $10 on Sonnet 5). Start with a small `limit` to sanity-check
+> output before spending on a whole backlog.
+
+### Programmatic
+
+```python
+from pr_triage.app import triage_repository
+
+digest, markdown, run = triage_repository("owner/repo", limit=3)
+
+print(markdown)                       # the Markdown report
+print(digest.counts)                  # {'ready_for_review': 3, 'likely_duplicate': 0, ...}
+for assessed in digest.ready:         # top ready-for-review PRs
+    print(assessed.number, assessed.assessment.recommended_category)
+print("failures:", run.failures)      # PRs that failed after retries
+```
+
+You can also use the pieces directly — e.g. list PRs without any Claude calls:
 
 ```python
 from dotenv import load_dotenv
-
 from pr_triage.github_client import build_client
 from pr_triage.github_collector import fetch_open_pull_requests
 
 load_dotenv()
-client = build_client()  # reads GITHUB_TOKEN from the environment
-prs = fetch_open_pull_requests("anthropics/claude-cookbooks", client)
-
+prs = fetch_open_pull_requests("owner/repo", build_client())
 print(f"{len(prs)} open PRs")
-for pr in prs[:5]:
-    print(f"#{pr.number} @{pr.author} — {pr.title}")
 ```
 
-Each result is an immutable `PullRequest` with `number`, `title`, `author`, `state`,
-`created_at`, `updated_at`, `html_url`, and `draft`.
+## Project layout
+
+```
+pr_triage/
+  models.py            # frozen dataclasses (PullRequest, EnrichedPullRequest,
+                       #   LinkedIssue, ChangedFile, RepoContext, PRAssessment,
+                       #   AssessedPR, Digest, TriageRun, ...)
+  github_client.py     # build_client() -> authenticated PyGithub client
+  github_collector.py  # fetch_open_pull_requests(repo, client)
+  github_graphql.py    # GraphQLClient.execute(query, variables)
+  github_rest.py       # RestClient.fetch_pr_diff(repo, number)  (raw unified diff)
+  enrichment.py        # fetch_pr_enrichment(repo, number, execute) -> EnrichedPullRequest
+  repo_context.py      # fetch_repo_context(get_text) -> RepoContext
+  diff.py              # cap_diff(text, max_chars)
+  analysis.py          # build_prompt(...) + analyze_pr(...) -> PRAssessment
+  digest.py            # build_digest(...) + render_digest_markdown(...)
+  runner.py            # run_backlog(items, process, ...) with retries/backoff
+  pipeline.py          # triage_pr(...) per-PR composition
+  app.py               # triage_repository(...) + CLI entry point
+tests/                 # pytest suite (TDD)
+```
+
+Every unit takes its I/O collaborators (HTTP/GitHub/Claude clients) as injected
+arguments, so the logic is unit-tested without network calls; `app.py` is the only
+module that wires real clients together.
 
 ## Tests
 
-Developed test-first (TDD). The collector is unit-tested against an injected,
-mocked GitHub client — no network calls.
+Developed test-first (TDD). Pure logic and mappings are covered by fast, offline
+unit tests (mocked clients — no network):
 
 ```bash
 .venv/bin/python -m pytest
 ```
 
-## Roadmap
+## Status
 
-- **Phase 0** — recon: API access, rate limits, 10-PR sample, token-cost estimate. *(in progress)*
-- **Phase 1 — v0 core (P0):** per-PR enrichment (diff/files, CI status, linked issue,
-  labels), CONTRIBUTING/PR-template context, issues with reactions/comments, the
-  Claude analysis call (5 structured fields per PR), and the digest.
-- **Phase 2 — publish pilot:** findings on 5–10 PRs, gauge reception.
-- **Phase 3 — outreach.**
-
-**Near-term next step:** introduce GraphQL for per-PR enrichment (diff, CI checks,
-linked issues, reactions in one query) to cut round-trips and rate-limit pressure at
-200+ PRs — the open-PR *list* stays on REST (PyGithub) as it is now.
+- **Phase 0 — recon:** ✅ done (API access, rate limits, measured token cost).
+- **Phase 1 — v0 core (P0):** pipeline is feature-complete (list → enrich → diff →
+  analyze → digest, with retry resilience). Remaining: a full backlog run and manual
+  verification of the assessments. Repo-wide issue mining for stronger
+  duplicate/reality detection is a follow-up.
+- **Phase 2 — publish pilot** and **Phase 3 — outreach** are later.
 
 ## Conventions
 
 - Everything inside this directory is written in **English** (code, comments, docs, commits).
-- No write actions against `anthropics/claude-cookbooks` — read-only public data only.
-  Any external publication is a manual, deliberate step.
+- **Read-only** — the tool never writes to any analyzed repository (no comments, no
+  labels). It uses only public data. Any external publication is a manual, deliberate step.

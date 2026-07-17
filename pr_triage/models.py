@@ -48,6 +48,42 @@ class PRAssessment:
 
 
 @dataclass(frozen=True)
+class AssessedPR:
+    """A PR paired with its triage verdict — the unit the digest aggregates."""
+
+    number: int
+    title: str
+    assessment: "PRAssessment"
+
+
+@dataclass(frozen=True)
+class Digest:
+    """Aggregated triage summary over all assessed PRs."""
+
+    total: int
+    counts: dict[str, int]
+    ready: list[AssessedPR]
+    ready_count: int
+    ready_truncated: bool
+
+
+@dataclass(frozen=True)
+class TriageFailure:
+    """A backlog item that could not be processed after all retries."""
+
+    item: object
+    error: str
+
+
+@dataclass(frozen=True)
+class TriageRun:
+    """Outcome of a backlog pass: successes and per-item failures."""
+
+    results: list
+    failures: list[TriageFailure]
+
+
+@dataclass(frozen=True)
 class RepoContext:
     """The repository's own DoD/AC reference material for grounding assessments."""
 
