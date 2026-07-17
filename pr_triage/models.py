@@ -37,6 +37,25 @@ class ChangedFile:
 
 
 @dataclass(frozen=True)
+class PRAssessment:
+    """The five-field triage verdict for one PR (no field may be empty)."""
+
+    summary: str
+    problem_statement: str
+    dod_ac_status: str
+    reality_assessment: str
+    recommended_category: str
+
+
+@dataclass(frozen=True)
+class RepoContext:
+    """The repository's own DoD/AC reference material for grounding assessments."""
+
+    contributing: str | None
+    pr_template: str | None
+
+
+@dataclass(frozen=True)
 class EnrichedPullRequest:
     """Structured per-PR context gathered from GitHub GraphQL (no diff text)."""
 
